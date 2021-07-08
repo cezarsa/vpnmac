@@ -1,0 +1,5 @@
+defaultgw=$(route -n get -host $VPNGATEWAY | grep -i 'gateway:' | awk '{print $2}')
+route -n add -net 10.0.0.0/8 -interface $TUNDEV
+route -n add -net 172.16.0.0/12 -interface $TUNDEV
+route -n add -net 192.168.0.0/16 -interface $TUNDEV
+route -n change default ${defaultgw}

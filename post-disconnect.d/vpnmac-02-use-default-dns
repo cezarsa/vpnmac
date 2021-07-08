@@ -1,0 +1,1 @@
+sudo networksetup -setdnsservers Wi-Fi Empty

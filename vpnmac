@@ -1,0 +1,91 @@
+#!/bin/bash
+
+set -eo pipefail
+
+# Input variables are automatically loaded from a .env file:
+USER=""
+PASSWORD=""
+TFA_NAME=""
+VPN_HOST=""
+SERVER_CERT=""
+
+function startup() {
+    SOURCE="${BASH_SOURCE[0]}"
+    while [ -h "$SOURCE" ]; do
+        DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+        SOURCE="$(readlink "$SOURCE")"
+        [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+    done
+    DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+    [ -f ${DIR}/.env ] && . ${DIR}/.env
+}
+
+function fixroutes() {
+    VPNGATEWAY=$(dig +short $VPN_HOST)
+    for f in /etc/vpnc/post-disconnect.d/*; do 
+        . $f
+    done
+}
+
+function stop() {
+    pid=$(pgrep 'openconnect' || true)
+    if [[ -z "$pid" ]]; then
+        fixroutes
+        echo 'openconnect pid not found'
+        return
+    fi
+    sudo kill "$pid"
+    SECONDS=0
+    while [[ "$(pgrep 'openconnect' || true)" != "" ]]; do
+        echo "waiting openconnect to die..."
+        sleep 1
+    done
+    vpncpid=$(pgrep -f 'vpnc-script' || true)
+    if [[ ! -z "$vpncpid" ]]; then
+        while [[ "$(pgrep -f 'vpnc-script' || true)" != "" ]]; do
+            echo "waiting vpnc-script to die..."
+            sleep 1
+        done
+    fi
+    fixroutes
+    echo 'done'
+}
+
+function start() {
+    pid=$(pgrep 'openconnect' || true)
+    if [[ -n "$pid" ]]; then
+        echo 'openconnect already running'
+        exit 1
+    fi
+
+    if [[ $SERVER_CERT != "" ]]; then
+        SERVER_CERT=--servercert=${SERVER_CERT}
+    fi
+
+    echo -n "${PASSWORD}$(2fa ${TFA_NAME})" | sudo openconnect -v ${SERVER_CERT} --dump-http-traffic --usergroup gateway -b --non-inter --protocol=gp $VPN_HOST -u $USER --passwd-on-stdin
+}
+
+function install() {
+    sudo mkdir -p /etc/vpnc/post-disconnect.d /etc/vpnc/post-connect.d
+    sudo rm -f /etc/vpnc/post-disconnect.d/vpnmac-* /etc/vpnc/post-connect.d/vpnmac-*
+    sudo cp ${DIR}/post-connect.d/* /etc/vpnc/post-connect.d/
+    sudo cp ${DIR}/post-disconnect.d/* /etc/vpnc/post-disconnect.d/
+}
+
+startup
+
+if [[ "$1" == "stop" ]]; then
+    stop
+    exit 0
+elif [[ "$1" == "start" ]]; then
+    start
+    exit 0
+elif [[ "$1" == "install" ]]; then
+    install
+    exit 0
+fi
+
+stop
+sleep 2
+start
