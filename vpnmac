@@ -63,7 +63,12 @@ function start() {
         SERVER_CERT=--servercert=${SERVER_CERT}
     fi
 
-    echo -n "${PASSWORD}$(2fa ${TFA_NAME})" | sudo openconnect -v ${SERVER_CERT} --dump-http-traffic --usergroup gateway -b --non-inter --protocol=gp $VPN_HOST -u $USER --passwd-on-stdin
+    full_password="${PASSWORD}"
+    if [[ $TFA_NAME != "" ]]; then
+        full_password="${full_password}$(2fa ${TFA_NAME})"
+    fi
+
+    echo -n "${full_password}" | sudo openconnect -v ${SERVER_CERT} --dump-http-traffic --usergroup gateway -b --non-inter --protocol=gp $VPN_HOST -u $USER --passwd-on-stdin
 }
 
 function install() {
