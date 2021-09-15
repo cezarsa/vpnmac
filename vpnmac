@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -eo pipefail
 
@@ -22,9 +22,18 @@ function startup() {
 }
 
 function fixroutes() {
+    set +e
     VPNGATEWAY=$(dig +short $VPN_HOST)
+    exit_err="$?"
+    set -e
+    if [[ "$exit_err" != "0" ]]; then
+        # Force gateway rules error with invalid IP.
+        VPNGATEWAY="999.999.999.999"
+    fi
     for f in /etc/vpnc/post-disconnect.d/*; do 
+        set +e
         . $f
+        set -e
     done
 }
 
@@ -36,7 +45,6 @@ function stop() {
         return
     fi
     sudo kill "$pid"
-    SECONDS=0
     while [[ "$(pgrep 'openconnect' || true)" != "" ]]; do
         echo "waiting openconnect to die..."
         sleep 1
@@ -53,14 +61,17 @@ function stop() {
 }
 
 function start() {
+    local __resultvar=$1
+
     pid=$(pgrep 'openconnect' || true)
     if [[ -n "$pid" ]]; then
         echo 'openconnect already running'
         exit 1
     fi
 
+    local server_cert_arg=""
     if [[ $SERVER_CERT != "" ]]; then
-        SERVER_CERT=--servercert=${SERVER_CERT}
+        server_cert_arg=--servercert=${SERVER_CERT}
     fi
 
     full_password="${PASSWORD}"
@@ -68,7 +79,40 @@ function start() {
         full_password="${full_password}$(2fa ${TFA_NAME})"
     fi
 
-    echo -n "${full_password}" | sudo openconnect -v ${SERVER_CERT} --dump-http-traffic --usergroup gateway -b --non-inter --protocol=gp $VPN_HOST -u $USER --passwd-on-stdin
+    set +e
+    sudo openconnect -v ${server_cert_arg} --dump-http-traffic --usergroup gateway --non-inter --protocol=gp $VPN_HOST -u $USER --passwd-on-stdin <<<${full_password}
+    exit_status=$?
+    set -e
+    if [[ "$__resultvar" != "" ]]; then
+        eval $__resultvar="'$exit_status'"
+    fi
+}
+
+function start_background() {
+    failure_count=0
+    while true; do
+        t0=${SECONDS}
+        echo "$(date) [vpnmac] Stopping existing processes..."
+        stop
+        sleep 2
+        echo "$(date) [vpnmac] Starting openconnect..."
+        start openconnect_status
+        if [[ "${openconnect_status}" == "0" ]]; then
+            echo "$(date) [vpnmac] openconnect exited with 0 - stopping loop"
+            break
+        fi
+        ellapsed=$((${SECONDS}-${t0}))
+        echo "$(date) [vpnmac] openconnect exited with ${openconnect_status} after ${ellapsed}s"
+        if [[ $ellapsed -gt 60 ]]; then
+            failure_count=0
+        fi
+        failure_count=$((${failure_count}+1))
+
+        if [[ ${failure_count} > 3 ]]; then
+            echo "$(date) [vpnmac] ${failure_count} failures reached - stopping loop"
+            break
+        fi
+    done
 }
 
 function install() {
@@ -89,8 +133,10 @@ elif [[ "$1" == "start" ]]; then
 elif [[ "$1" == "install" ]]; then
     install
     exit 0
+elif [[ "$1" == "log" ]]; then
+    cat ${HOME}/.vpnmac.log
+    exit 0
 fi
 
 stop
-sleep 2
-start
+start_background >${HOME}/.vpnmac.log 2>&1 &
